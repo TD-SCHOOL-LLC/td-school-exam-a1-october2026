@@ -426,13 +426,13 @@ const guidedData = [
 
 const matchWords = ["Teacher","Student","Classroom","Break","Homework"];
 const matchOptions = [
-  {k:"a", t:"A person who teaches students"},
-  {k:"b", t:"A person who studies at school"},
-  {k:"c", t:"A room where students learn"},
+  {k:"a", t:"Work students do at home"},
+  {k:"b", t:"A room where students learn"},
+  {k:"c", t:"A person who teaches students"},
   {k:"d", t:"A short rest time between classes"},
-  {k:"e", t:"Work students do at home"},
+  {k:"e", t:"A person who studies at school"},
 ];
-const matchAnswers = ["a","b","c","d","e"];
+const matchAnswers = ["c","e","b","d","a"];
 
 /* ---------------- RENDER ---------------- */
 window.wordOrderAnswers = [];
@@ -622,9 +622,186 @@ function normalize(s){
   return (s||'').toString().trim().toLowerCase().replace(/[.,!?]/g,'').replace(/\s+/g,' ');
 }
 
+/* ---------- Extra rule-based checks for typical A1 learner errors ---------- */
+const CR_SKIP = new Set(['you','we','they','i','he','she','it','who','that','which','what','there','here','and','or','but','also','very','not','so','too','just','all','both','many','some','few','several','others','best','rest','rich','poor','young','old','majority','number','couple','lot','one','ones','everyone','everybody','something','nothing','anything','people','children','men','women','police','feet','teeth','mice','sheep','fish','staff','family','team','than','then','when','where','how','why']);
+const CR_PL_IRREG = new Set(['people','children','men','women','feet','teeth','mice','police']);
+const CR_SINGULAR_S = new Set(['news','physics','maths','mathematics','economics','politics','athletics','series','species','gas','lens','chaos','has','was','this','his','its','yes','always','perhaps','sometimes','across','less','unless','bus','class','glass','boss','dress','business','success','address']);
+const CR_AUX = new Set(['do','does','did','can','could','will','would','should','shall','may','might','must','dont',"don't","doesn't","didn't","can't","won't",'cannot','is','are','was','were','be','let','lets','make','makes','made','help','helps','helped','see','saw','watch','watched','hear','heard','to']);
+const CR_PREP = new Set(['in','at','of','on','from','with','near','for','by','about','under','behind','between','into','inside','outside','around','after','before','during','like','than','as','without','beside','across','through','over','towards','toward','until','since']);
+const CR_BASE_VERBS = ['like','love','play','go','want','need','study','live','help','eat','see','make','write','teach','speak','come','take','get','walk','work','learn','start','finish','watch','drink','use','ask','know','say'];
+const CR_THIRD_VERBS = ['likes','loves','plays','goes','wants','needs','studies','lives','helps','eats','sees','makes','writes','teaches','speaks','comes','takes','gets','walks','works','learns','starts','watches','drinks','uses','asks','knows','says'];
+const CR_NOUNS = ['classroom','teacher','student','pupil','book','notebook','pencil','pen','friend','subject','lesson','desk','chair','room','boy','girl','school','library','toy','game','sport','animal','brother','sister','bag','ruler','eraser','computer','window','door','picture','day','hour','minute','week','year','apple','banana','orange','flower','tree','car','house','city','country','language','song','movie','story','question','answer','word','sentence','letter','number','color','colour','kid','class','lesson','teacher','playground','lunch','break','test','exam'];
+
+function crThird(v){
+  v = v.toLowerCase();
+  if(v==='have') return 'has';
+  if(v==='go') return 'goes';
+  if(v==='do') return 'does';
+  if(/[^aeiou]y$/.test(v)) return v.slice(0,-1)+'ies';
+  if(/(s|x|z|ch|sh)$/.test(v)) return v+'es';
+  return v+'s';
+}
+function crBaseFromThird(v){
+  v = v.toLowerCase();
+  if(v==='has') return 'have';
+  if(v==='goes') return 'go';
+  if(v==='does') return 'do';
+  if(/ies$/.test(v)) return v.slice(0,-3)+'y';
+  if(/(ches|shes|sses|xes|zes)$/.test(v)) return v.slice(0,-2);
+  return v.slice(0,-1);
+}
+function crPlural(n){
+  n = n.toLowerCase();
+  if(n==='child') return 'children';
+  if(n==='man') return 'men';
+  if(n==='woman') return 'women';
+  if(/[^aeiou]y$/.test(n)) return n.slice(0,-1)+'ies';
+  if(/(s|x|z|ch|sh)$/.test(n)) return n+'es';
+  return n+'s';
+}
+function crIsSingularNoun(w){
+  w = w.toLowerCase();
+  if(CR_SKIP.has(w) || w.length < 3) return false;
+  if(/(ss|us|is|ics)$/.test(w)) return true;
+  return !/s$/.test(w);
+}
+function crIsPluralNoun(w){
+  w = w.toLowerCase();
+  if(CR_PL_IRREG.has(w)) return true;
+  if(CR_SKIP.has(w) || CR_SINGULAR_S.has(w) || w.length < 3) return false;
+  if(/(ss|us|is|ics)$/.test(w)) return false;
+  return /s$/.test(w);
+}
+function crPrevWord(text, idx){
+  const m = text.slice(0, idx).match(/([A-Za-z']+)([^A-Za-z']*)$/);
+  if(!m || /[.!?]/.test(m[2])) return '';
+  return m[1].toLowerCase();
+}
+function crIng(v){
+  const irr = {swim:'swimming', run:'running', write:'writing', dance:'dancing'};
+  return irr[v] || (v+'ing');
+}
+
+function customChecks(text){
+  const out = [];
+  const add = (offset, length, message, replacements) => {
+    if(out.some(o => offset < o.offset+o.length && o.offset < offset+length)) return;
+    out.push({ offset, length, message, replacements: replacements.map(v=>({value:v})), wrong: text.substr(offset, length), custom:true });
+  };
+  let m;
+
+  // R1: plural subject + "is"
+  const r1 = /\b(my|the|our|his|her|their|your|these|those|many|some|all|two|three|four|five|six|seven|eight|nine|ten)\s+(?:([A-Za-z]+)\s+)?([A-Za-z]+)\s+(is)\b/gi;
+  while((m = r1.exec(text))){
+    if(CR_PREP.has(crPrevWord(text, m.index))) continue;
+    if(crIsPluralNoun(m[3])) add(m.index + m[0].length - 2, 2, 'The subject "'+m[3]+'" is plural, so use "are" instead of "is".', ['are']);
+  }
+  // R2: singular subject + "are"
+  const r2 = /\b(my|the|our|his|her|this|that|your|their|a|an)\s+(?:([A-Za-z]+)\s+)?([A-Za-z]+)\s+(are)\b/gi;
+  while((m = r2.exec(text))){
+    const prev = crPrevWord(text, m.index);
+    if(prev==='and' || prev==='or' || CR_PREP.has(prev)) continue;
+    if(crIsSingularNoun(m[3])) add(m.index + m[0].length - 3, 3, 'The subject "'+m[3]+'" is singular, so use "is" instead of "are".', ['is']);
+  }
+  // R3a: we/they/you + has/is/was
+  const r3a = /\b(we|they|you)\s+(has|is|was)\b/gi;
+  while((m = r3a.exec(text))){
+    const map = {has:'have', is:'are', was:'were'};
+    const rep = map[m[2].toLowerCase()];
+    add(m.index + m[0].length - m[2].length, m[2].length, 'Use "'+rep+'" with "'+m[1]+'".', [rep]);
+  }
+  // R3b: I is/are/has
+  const r3b = /\bI\s+(is|are|has)\b/g;
+  while((m = r3b.exec(text))){
+    if(['and','or','nor','than','as'].includes(crPrevWord(text, m.index))) continue;
+    const rep = m[1]==='has' ? 'have' : 'am';
+    add(m.index + m[0].length - m[1].length, m[1].length, 'Use "'+rep+'" with "I".', [rep]);
+  }
+  // R3c: he/she/it + have/are/do
+  const r3c = /\b(he|she|it)\s+(have|are|do)\b/gi;
+  while((m = r3c.exec(text))){
+    if(CR_AUX.has(crPrevWord(text, m.index))) continue;
+    const rep = {have:'has', are:'is', do:'does'}[m[2].toLowerCase()];
+    add(m.index + m[0].length - m[2].length, m[2].length, 'Use "'+rep+'" with "'+m[1]+'".', [rep]);
+  }
+  // R3d: I/we/you/they + 3rd-person verb
+  const r3d = new RegExp('\\b(I|we|you|they)\\s+('+CR_THIRD_VERBS.join('|')+')\\b','gi');
+  while((m = r3d.exec(text))){
+    const rep = crBaseFromThird(m[2]);
+    add(m.index + m[0].length - m[2].length, m[2].length, 'Use "'+rep+'" with "'+m[1]+'" (no -s).', [rep]);
+  }
+  // R3e: he/she/it + base verb
+  const r3e = new RegExp('\\b(he|she|it)\\s+('+CR_BASE_VERBS.join('|')+')\\b','gi');
+  while((m = r3e.exec(text))){
+    if(CR_AUX.has(crPrevWord(text, m.index))) continue;
+    const rep = crThird(m[2]);
+    add(m.index + m[0].length - m[2].length, m[2].length, 'Use "'+rep+'" with "'+m[1]+'" (add -s).', [rep]);
+  }
+  // R4: singular noun subject + base verb
+  const r4 = new RegExp('\\b(my|the|our|his|her|this|that|your|their)\\s+(?:([A-Za-z]+)\\s+)?([A-Za-z]+)\\s+('+CR_BASE_VERBS.join('|')+'|have)\\b','gi');
+  while((m = r4.exec(text))){
+    { const pw = crPrevWord(text, m.index); if(CR_AUX.has(pw) || CR_PREP.has(pw)) continue; }
+    if(!crIsSingularNoun(m[3])) continue;
+    const rep = crThird(m[4]);
+    add(m.index + m[0].length - m[4].length, m[4].length, 'After a singular subject ("'+m[3]+'") use "'+rep+'".', [rep]);
+  }
+  // R5: There is + plural quantifier
+  const r5 = /\bthere\s+(is)\s+(many|several|a few|few|two|three|four|five|six|seven|eight|nine|ten|these|those)\b/gi;
+  while((m = r5.exec(text))){
+    const o = m.index + m[0].indexOf(m[1], 5);
+    add(o, 2, 'Use "There are" with "'+m[2]+'" (plural).', ['are']);
+  }
+  // R6: plural quantifier + singular noun
+  const nounSet = new Set(CR_NOUNS);
+  const pluralSet = new Set(CR_NOUNS.map(crPlural));
+  const r6 = /\b(many|several|a few|few|two|three|four|five|six|seven|eight|nine|ten|these|those|both)\s+([A-Za-z]+)(?:(\s*,\s*|\s+and\s+)([A-Za-z]+))?/gi;
+  while((m = r6.exec(text))){
+    const n1 = m[2].toLowerCase();
+    const n1Singular = nounSet.has(n1);
+    const n1Known = n1Singular || pluralSet.has(n1);
+    let isModifier = false;
+    if(n1Singular){
+      const after = text.slice(m.index + m[0].indexOf(m[2], m[1].length) + m[2].length).match(/^\s+([A-Za-z]+)/);
+      if(after && /s$/i.test(after[1]) && after[1].length > 3 && !CR_THIRD_VERBS.includes(after[1].toLowerCase()) && !['this','does','has','was','is'].includes(after[1].toLowerCase())) isModifier = true;
+    }
+    if(n1Singular && !isModifier){
+      const o1 = m.index + m[0].indexOf(m[2], m[1].length);
+      add(o1, m[2].length, 'After "'+m[1]+'" the noun should be plural: "'+crPlural(n1)+'".', [crPlural(n1)]);
+    }
+    if(m[4] && n1Known && nounSet.has(m[4].toLowerCase())){
+      const o2 = m.index + m[0].length - m[4].length;
+      add(o2, m[4].length, 'This noun should also be plural: "'+crPlural(m[4])+'".', [crPlural(m[4])]);
+    }
+  }
+  // R7: like/love/hate/enjoy + bare verb
+  const r7 = /\b(like|likes|love|loves|hate|hates|enjoy|enjoys)\s+(read|play|go|watch|eat|study|write|speak|swim|run|draw|sing|cook|learn|sleep|walk|listen)\b(?![-'\w])/gi;
+  while((m = r7.exec(text))){
+    const prev = crPrevWord(text, m.index);
+    if(['look','looks','looked','looking','feel','feels','felt'].includes(prev)) continue;
+    const v = m[2].toLowerCase();
+    const o = m.index + m[0].length - m[2].length;
+    const reps = /^enjoy/i.test(m[1]) ? [crIng(v)] : ['to '+v, crIng(v)];
+    add(o, m[2].length, 'After "'+m[1]+'" use "to '+v+'" or "'+crIng(v)+'".', reps);
+  }
+
+  out.sort((a,b)=>a.offset-b.offset);
+  return out;
+}
+
+function mergeMatches(ltMatches, custom){
+  const out = [...(ltMatches||[])];
+  (custom||[]).forEach(c=>{
+    const overlap = out.some(m => c.offset < m.offset+m.length && m.offset < c.offset+c.length);
+    if(!overlap) out.push(c);
+  });
+  out.sort((a,b)=>a.offset-b.offset);
+  return out;
+}
+
+
 async function checkGrammar(text){
   try{
-    return await withRetry(async () => {
+    const lt = await withRetry(async () => {
       const response = await fetch('https://api.languagetool.org/v2/check', {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
@@ -634,10 +811,101 @@ async function checkGrammar(text){
       const data = await response.json();
       return data.matches || [];
     }, 3, 1500);
+    let custom = [];
+    try{ custom = customChecks(text); }catch(e){ console.error('customChecks error', e); }
+    const ltFiltered = lt.filter(m => {
+      const isSpelling = m.rule && (m.rule.issueType === 'misspelling' || (m.rule.category && m.rule.category.id === 'TYPOS'));
+      if(!isSpelling) return true;
+      const w = text.substr(m.offset, m.length);
+      // proper name in the middle of a sentence (capitalised, not after . ! ?)
+      const before = text.slice(0, m.offset).replace(/\s+$/, '');
+      const sentenceStart = before === '' || /[.!?]$/.test(before);
+      if(/^[A-Z]/.test(w) && !sentenceStart) return false;
+      // British / American spelling variants (favourite/favorite, colour/color, organise/organize ...)
+      const norm = s => s.toLowerCase().replace(/our/g,'or').replace(/ise\b/g,'ize').replace(/yse\b/g,'yze').replace(/re\b/g,'er');
+      if((m.replacements || []).slice(0,3).some(r => norm(r.value) === norm(w))) return false;
+      return true;
+    });
+    return mergeMatches(ltFiltered, custom).map(m => ({
+      offset: m.offset,
+      length: m.length,
+      message: m.message,
+      replacements: (m.replacements || []).slice(0,2).map(r => ({ value: r.value })),
+      wrong: m.wrong != null ? m.wrong : text.substr(m.offset, m.length)
+    }));
   }catch(err){
     console.error('Grammar check error:', err);
     return null;
   }
+}
+
+/* ---------------- AI proofreading (Claude via Apps Script proxy) ---------------- */
+async function aiCheck(items){
+  if(!SHEETS_URL) return null;
+  try{
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 45000);
+    const res = await fetch(SHEETS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'check', items }),
+      signal: ctrl.signal
+    });
+    clearTimeout(timer);
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const data = await res.json();
+    if(!data.ok) throw new Error(data.error || 'AI error');
+    return data.results || [];
+  }catch(err){
+    console.error('AI check error:', err);
+    return null;
+  }
+}
+
+function aiErrorsToMatches(text, errors){
+  const matches = [];
+  let cursor = 0;
+  (errors || []).forEach(e => {
+    const wrong = String((e && e.wrong) || '');
+    if(!wrong) return;
+    let idx = text.indexOf(wrong, cursor);
+    const foundAhead = idx >= 0;
+    if(!foundAhead) idx = text.indexOf(wrong);
+    matches.push({
+      offset: idx,
+      length: wrong.length,
+      message: (e.type ? '['+e.type+'] ' : '') + (e.explanation || ''),
+      replacements: e.correction ? [{ value: String(e.correction) }] : [],
+      wrong,
+      ai: true
+    });
+    if(foundAhead) cursor = idx + wrong.length;
+  });
+  return matches;
+}
+
+function scoreEssayAI(text, aiRes){
+  const trimmed = (text||'').trim();
+  const wordCount = trimmed.length ? trimmed.split(/\s+/).filter(w=>w.length>0).length : 0;
+  const matches = aiErrorsToMatches(trimmed, aiRes.errors);
+  const onTopic = aiRes.on_topic !== false;
+  let points;
+  if(wordCount === 0) points = 0;
+  else if(wordCount < ESSAY_MIN_WORDS) points = Math.max(0, Math.min(Math.round(ESSAY_WEIGHT * 0.3), ESSAY_WEIGHT - matches.length * 2));
+  else points = Math.max(0, Math.min(ESSAY_WEIGHT, ESSAY_WEIGHT - matches.length * 2));
+  if(!onTopic) points = Math.min(points, 6);
+  return { points, wordCount, matches, serviceDown:false, wcOk: wordCount >= ESSAY_MIN_WORDS, onTopic, aiUsed:true };
+}
+
+function scoreGuidedAI(text, aiRes){
+  const trimmed = (text||'').trim();
+  const wordCount = trimmed.length ? trimmed.split(/\s+/).filter(w=>w.length>0).length : 0;
+  if(wordCount < 3) return { isCorrect:false, wordCount, errorCount:null, errors:[] };
+  const matches = aiErrorsToMatches(trimmed, aiRes.errors);
+  const errors = matches.map(m => '"'+m.wrong+'" → "'+(m.replacements[0] ? m.replacements[0].value : '?')+'"' + (m.message ? ' ('+m.message+')' : ''));
+  const relevant = aiRes.answers_question !== false;
+  if(!relevant) errors.push('Cavab suala mənaca uyğun deyil');
+  return { isCorrect: matches.length === 0 && relevant, wordCount, errorCount: errors.length, errors };
 }
 
 async function checkGuidedAnswer(text){
@@ -653,7 +921,7 @@ async function checkGuidedAnswer(text){
     return { isCorrect:false, wordCount, errorCount:null, errors:[], serviceDown:true };
   }
   const errorCount = matches.length;
-  const isCorrect = errorCount <= 1;
+  const isCorrect = errorCount === 0;
   return { isCorrect, wordCount, errorCount, errors: matches.slice(0,3).map(m=>m.message) };
 }
 
@@ -706,10 +974,23 @@ async function gradeAll(){
     blanksDetails.push({ q:'Boşluq #'+(i+1), selectedText: val || null, correctText: ans, isCorrect });
   });
 
+  // ---- AI proofreading: ONE request for all written answers (guided + essay) ----
+  const essayTextForAI = document.getElementById('essayBox').value.trim();
+  const aiItems = [];
+  guidedData.forEach((item,i)=>{
+    const v = document.getElementById('guided-'+i).value.trim();
+    if(v) aiItems.push({ id:'g'+i, prompt:item.prompt, text:v });
+  });
+  if(essayTextForAI) aiItems.push({ id:'essay', topic:'My school (A1 level)', text:essayTextForAI });
+  const aiResults = aiItems.length ? await aiCheck(aiItems) : null;
+  const aiById = {};
+  (aiResults || []).forEach(r => { if(r && r.id) aiById[r.id] = r; });
+  const aiUsed = !!aiResults;
+
   for(let i=0; i<guidedData.length; i++){
     const item = guidedData[i];
     const val = document.getElementById('guided-'+i).value;
-    const result = await checkGuidedAnswer(val);
+    const result = (val.trim() && aiById['g'+i]) ? scoreGuidedAI(val, aiById['g'+i]) : await checkGuidedAnswer(val);
     if(result.isCorrect) guidedScore++;
     let selectedText = val || null;
     if(result.errorCount !== null && result.errorCount > 0 && result.errors.length){
@@ -729,7 +1010,8 @@ async function gradeAll(){
   });
 
   const essayText = document.getElementById('essayBox').value.trim();
-  const essayResult = await checkEssay(essayText);
+  const essayResult = (essayText && aiById['essay']) ? scoreEssayAI(essayText, aiById['essay']) : await checkEssay(essayText);
+  const essayOnTopic = essayResult.onTopic !== false;
   const essayPoints = essayResult.points;          // 0-20
   const essayMatches = essayResult.matches;
   const essayWordCount = essayResult.wordCount;
@@ -757,7 +1039,7 @@ async function gradeAll(){
   saveResult({
     woScore, blanksScore, guidedScore, matchScore, essayPoints, pct,
     woDetails, blanksDetails, guidedDetails, matchDetails, essayMatches, essayServiceDown,
-    essayText, essayWordCount
+    essayText, essayWordCount, aiUsed, essayOnTopic
   });
 }
 
@@ -797,7 +1079,9 @@ async function saveResult(scores){
       match: scores.matchDetails,
       essayMatches: scores.essayMatches,
       essayWordCount: scores.essayWordCount,
-      essayServiceDown: scores.essayServiceDown
+      essayServiceDown: scores.essayServiceDown,
+      aiUsed: scores.aiUsed,
+      essayOnTopic: scores.essayOnTopic
     }
   };
   try{
@@ -858,10 +1142,17 @@ function generateDetailHtml(r){
   const essayBlock = `<div class="detail-block"><h4>İnşa — ${r.essay||0}/20 bal (ümumi qiymətin 20%-i)</h4>
     ${serviceDownWarning}
     <div class="essay-review">${annotateEssay(r.essayText, (d.essayMatches||[]))}</div>
-    <p style="font-size:11.5px;color:var(--ink-soft);font-weight:700;margin-top:8px;">🖊️ Qırmızı işarələnmiş yerlər LanguageTool tərəfindən tapılan qrammatik/orfoqrafik/leksik səhvlərdir — üstündəki qırmızı söz təklif olunan düzəlişdir.</p>
+    <p style="font-size:11.5px;color:var(--ink-soft);font-weight:700;margin-top:8px;">🖊️ Qırmızı işarələnmiş yerlər tapılan səhvlərdir (qrammatika, leksika, orfoqrafiya) — üstündəki qırmızı söz təklif olunan düzəlişdir.</p>
     ${correctionList(d.essayMatches||[])}
   </div>`;
+  const aiBadge = d.aiUsed
+    ? '<div class="detail-item correct" style="font-size:12.5px;margin-bottom:8px;">🤖 Yazılı cavablar (sual-cavab və inşa) süni intellekt (Claude) ilə yoxlanılıb.</div>'
+    : '<div class="detail-item incorrect" style="font-size:12.5px;margin-bottom:8px;">⚙️ Süni intellekt yoxlaması əlçatan olmadı — qayda əsaslı yoxlama (LanguageTool + A1 qaydaları) istifadə olunub.</div>';
+  const topicNote = (d.essayOnTopic === false)
+    ? '<div class="detail-item incorrect" style="font-size:12.5px;margin-bottom:8px;">⚠️ İnşa mövzudan kənardır ("My school") — bal məhdudlaşdırılıb.</div>'
+    : '';
   return `<div class="detail-wrap">
+    ${aiBadge}${topicNote}
     ${section('Word Order', d.wo)}
     ${section('Fill in the Blanks', d.blanks)}
     ${section('Sual-Cavab', d.guided)}
@@ -879,9 +1170,8 @@ function correctionList(matches){
     return '<p style="font-size:12.5px;color:var(--chalk-green);font-weight:800;margin-top:10px;">✔ Heç bir səhv tapılmadı.</p>';
   }
   const items = matches.map((m,i)=>{
-    const wrong = (m.context && typeof m.offset==='number' && typeof m.length==='number')
-      ? (m.context.text || '').slice(m.context.offset, m.context.offset + m.length)
-      : '';
+    const wrong = (m.wrong != null) ? m.wrong
+      : ((m.context && typeof m.length==='number') ? (m.context.text || '').slice(m.context.offset, m.context.offset + m.length) : '');
     const suggestion = (m.replacements && m.replacements[0] && m.replacements[0].value) ? m.replacements[0].value : '(təklif yoxdur)';
     return `<div class="detail-item incorrect" style="margin-bottom:6px;">
       ${i+1}. <s>${escapeHtml(wrong)}</s> → <b>${escapeHtml(suggestion)}</b><br>
@@ -915,8 +1205,9 @@ function annotateEssay(text, matches){
 
 async function fetchRecords(){
   if(SHEETS_URL){
-    const res = await withRetry(() => fetch(SHEETS_URL).then(r => { if(!r.ok) throw new Error('HTTP '+r.status); return r; }), 3, 1200);
+    const res = await withRetry(() => fetch(SHEETS_URL + '?t=' + Date.now(), {cache:'no-store'}).then(r => { if(!r.ok) throw new Error('HTTP '+r.status); return r; }), 3, 1200);
     const data = await res.json();
+    window.__lastFetchInfo = { rows: (data.results||[]).length, keys: Object.keys(data||{}).join(', ') };
     return (data.results || []).map(r => {
       const d = r.details || {};
       return {...r, _key: r.id,
@@ -946,7 +1237,8 @@ async function loadResults(){
     records.sort((a,b)=> new Date(b.date) - new Date(a.date));
 
     if(records.length===0){
-      wrap.innerHTML = '<div class="empty-note">Hələ heç bir nəticə yoxdur.</div>';
+      const info = window.__lastFetchInfo ? ' <br><span style="font-size:11px;">(Cədvəldən gələn sətir sayı: '+window.__lastFetchInfo.rows+'; cavabdakı açarlar: '+window.__lastFetchInfo.keys+')</span>' : '';
+      wrap.innerHTML = '<div class="empty-note">Hələ heç bir nəticə yoxdur.'+info+'</div>';
       return;
     }
 
